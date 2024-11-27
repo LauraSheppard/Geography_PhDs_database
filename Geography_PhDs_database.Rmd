@@ -1,0 +1,323 @@
+---
+title: "Geography PhDs"
+author: "Laura Sheppard"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Geography PhDs in the UK
+
+This markdown file and R code accompanies the article `Finding the female geographers: The gendered dynamics of UK geography PhD study` (Sheppard and Reades, 2024) in `The Professional Geographer`.
+
+The source data used to create this database of Geography PhDs is the April 2023 version of the British Library's E-Thesis Online Service (EThOS) metadata, where there are 627,042 doctoral records and 15 variables.
+
+The variables in EThOS include:
+    + Thesis title
+    + DOI
+    + Author name
+    + Author ISNI
+    + ORCID
+    + Institution
+    + Institutional ISNI
+    + Date of award
+    + Qualification
+    + Abstract
+    + Subject Discipline
+    + Supervisor
+    + Funder(s)
+    + EThOS URL
+    
+Outline of the markdown file:
+  + Cleaning the data
+  + Identifying geography PhDs
+  + Combining geography PhDs
+
+### Scope and clean the EThOS data
+
+```{r packages, echo = FALSE, include = FALSE}
+#load relevant packages
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(janitor)
+library(stringi)
+library(stringr)
+library(ggplot2)
+library(readr)
+library(tm)
+library(mosaic)
+```
+
+```{r read in the EThOS data, echo = FALSE, include = FALSE}
+EThOS <- read_csv("EThOS_CSV_202304.csv") %>%
+  clean_names() #clean column names using janitor
+
+#https://bl.iro.bl.uk/concern/datasets/37e3752f-5360-41d4-9d8c-b54dcabb9d1c
+#April 2023 - 627,042 records, 15 variables
+```
+
+```{r extract EThOS IDs, echo = FALSE, include = FALSE}
+#Extract EThOS IDs from EThOS URLs
+EThOS <- EThOS %>%
+  separate(e_th_os_url, c('EThOS_URL', 'EThOS_ID'), sep = 'bl.ethos') 
+
+#Remove remaining full stop
+EThOS$EThOS_ID <- gsub('\\.', '', EThOS$EThOS_ID)
+```
+
+```{r extract ISNI IDs, echo = FALSE, include = FALSE}
+#Extract HEIs ISNI from institution isni URLs
+EThOS <- EThOS %>%
+  separate(institution_isni, c('institution_URL', 'institution_isni'), sep = '/isni/') 
+
+#Remove remaining full stop
+EThOS$institution_isni <- gsub('\\.', '', EThOS$institution_isni)
+```
+
+```{r select columns needed, echo = FALSE, include = FALSE}
+#select only the necessary columns
+EThOS <- EThOS %>%
+  dplyr::select(title, author, author_isni, institution, institution_isni, date, qualification, subject_discipline, supervisor_s, abstract, EThOS_ID, ir_url)
+```
+
+For the PhD research, the EThOS team at the BL provided additional data that is not publicly available. 
+
+```{r add in the BL's additional data, echo = FALSE, include = FALSE}
+#additional EThOS data provided by the BL
+EThOS_AdditionalData <- read_csv("EThOS_CSV_202304_AdditionalData.csv") %>%
+  clean_names()
+
+#change the column names
+EThOS_AdditionalData <- rename(EThOS_AdditionalData, c(EThOS_ID = "x1")) 
+EThOS_AdditionalData <- rename(EThOS_AdditionalData, c(ddc_number = "x2"))
+EThOS_AdditionalData <- rename(EThOS_AdditionalData, c(keywords = "x4"))
+EThOS_AdditionalData <- rename(EThOS_AdditionalData, c(department = "x5"))
+
+#as numeric
+EThOS_AdditionalData$ddc_number <- as.numeric(EThOS_AdditionalData$ddc_number)
+```
+
+```{r join additional EThOS data to the main EThOS data, echo = FALSE, include = FALSE}
+#add additional data to main EThOS data
+#as numeric
+EThOS$EThOS_ID <- as.numeric(EThOS$EThOS_ID)
+
+EThOS <- EThOS %>%
+  left_join(.,
+            EThOS_AdditionalData, 
+            by = c("EThOS_ID" = "EThOS_ID"))
+
+EThOS <- EThOS %>%
+  distinct(title, institution, EThOS_ID, .keep_all = TRUE)
+```
+
+```{r add in DDC data, echo = FALSE, include = FALSE}
+#Dewey Decimal Classifications
+#extract numbers and labels to merge
+
+EThOS_DDC <- read_csv("DDC.csv") %>%
+  clean_names() %>%
+  group_by(ddc, ddc2) %>%
+  summarise(ddc_total = n())
+
+#truncate ddcs
+EThOS$ddc_number <- trunc(EThOS$ddc_number*10^2)/10^2 #to 2 decimal places - easier for data matching
+EThOS_DDC$ddc <- trunc(EThOS_DDC$ddc*10^2)/10^2 #to 2 decimal places - easier for data matching
+```
+
+```{r join to DDC data to main EThOS data}
+#as numeric
+EThOS_DDC$ddc <- as.numeric(EThOS_DDC$ddc)
+
+EThOS <- EThOS %>%
+  left_join(.,
+            EThOS_DDC, 
+            by = c("ddc_number" = "ddc"))
+
+EThOS <- EThOS %>%
+  distinct(title, institution, EThOS_ID, .keep_all = TRUE)
+```
+
+```{r filter by qualification type}
+
+#filter for PhDs rather than other qualifications 
+EThOS <- EThOS %>%
+  filter(qualification == "Thesis (Ph.D.)")
+
+#removes around 37,000 records, leaves 590,900 records
+```
+
+```{r remove duplicate column and rename}
+EThOS$subject_discipline.y <- NULL
+
+EThOS <- EThOS %>%
+  rename(., subject_discipline = "subject_discipline.x")
+```
+
+### Filter / identify geography PhD theses
+
+As the EThOS data has been cleaned and additional data has been added in, we can now work on identifying geography PhDs.
+
+Four ways:
++ Geography and travel sub-discipline 
++ Geography as a key word
++ Geography in the title of the thesis
++ Geography departments
+
+```{r identify geography PhDs - DDC}
+#how to identify geography PhD thesis
+#change to lower case
+EThOS$title <- tolower(EThOS$title)
+EThOS$keywords <- tolower(EThOS$keywords)
+EThOS$department <- tolower(EThOS$department)
+
+#sub discipline of geography and travel
+geography_sub_discipline <- EThOS %>%
+  filter(ddc2 == "Geography & travel")
+```
+
+```{r other ways to identify geography PhDs}
+geography_dep <- EThOS %>%
+  filter(grepl("geography|geograph|geospatial|geographical|geographic|cartographic", department))
+
+geography_titles <- EThOS %>%
+  filter(grepl("geography|geograph|geospatial|geographical|geographic|cartographic", title))
+
+geography_keywords <- EThOS %>%
+  filter(grepl("geography|geograph|geospatial|geographical|geographic|cartographic", keywords))
+```
+
+Filtering for the word geography in the title, key word, and department columns finds more "geography" theses than simply selecting on the sub-discipline of geography and travel. Less theses contain geography as a key word than the other two categories. 
+
++ Key words - 2392 PhDs
++ Sub discipline - 1599 PhDs
++ Titles - 1857 PhDs
++ Departments - 3263 PhDs
+
+```{r Geography PhDs over time 1}
+#Using KEY WORDS
+
+Geog_years1 <- geography_keywords %>%
+  group_by(date) %>%
+  summarise(count_years = n()) %>%
+  filter(date >= 1917) %>%
+  filter(date <= 2022)
+  
+ggplot(Geog_years1, 
+       aes(x=date)) + 
+  geom_line(aes(y = count_years, colour = "PhD students")) + 
+  scale_colour_manual(values=c(`PhD students` ="Dark Blue")) +
+  theme(legend.position="top") +
+  labs(title = paste0("Number of PhD students in Geography (using key words)"),
+       subtitle = paste0("", length(unique(geography_keywords$institution)), " Higher Education Institutions"),
+       color = "Number of Geography PhD students",
+       y = "Number of PhDs per year",
+       x = "Year the thesis was awarded")
+```
+
+```{r Geography PhDs over time 2}
+#Using TITLES
+
+Geog_years2 <- geography_titles %>%
+  group_by(date) %>%
+  summarise(count_years = n()) %>%
+  filter(date >= 1917) %>%
+  filter(date <= 2022)
+  
+ggplot(Geog_years2, 
+       aes(x=date)) + 
+  geom_line(aes(y = count_years, colour = "PhD students")) + 
+  scale_colour_manual(values=c(`PhD students` ="Dark Blue")) +
+  theme(legend.position="top") +
+  labs(title = paste0("Number of PhD students in Geography (using titles)"),
+       subtitle = paste0("", length(unique(geography_titles$institution)), " Higher Education Institutions"),
+       color = "Number of Geography PhD students",
+       y = "Number of PhDs per year",
+       x = "Year the thesis was awarded")
+```
+
+```{r Geography PhDs over time 3}
+#Using SUB DISCIPLINES
+
+Geog_years3 <- geography_sub_discipline %>%
+  group_by(date) %>%
+  summarise(count_years = n()) %>%
+  filter(date >= 1917) %>%
+  filter(date <= 2022)
+  
+ggplot(Geog_years3, 
+       aes(x=date)) + 
+  geom_line(aes(y = count_years, colour = "PhD students")) + 
+  scale_colour_manual(values=c(`PhD students` ="Dark Blue")) +
+  theme(legend.position="top") +
+  labs(title = paste0("Number of PhD students in Geography (using ddc numbers)"),
+       subtitle = paste0("", length(unique(geography_sub_discipline$institution)), " Higher Education Institutions"),
+       color = "Number of Geography PhD students",
+       y = "Number of PhDs per year",
+       x = "Year the thesis was awarded")
+```
+
+```{r Geography PhDs over time 4}
+#Using DEPARTMENTS
+
+Geog_years4 <- geography_dep %>%
+  group_by(date) %>%
+  summarise(count_years = n()) %>%
+  filter(date >= 1917) %>%
+  filter(date <= 2022)
+  
+ggplot(Geog_years4, 
+       aes(x=date)) + 
+  geom_line(aes(y = count_years, colour = "PhD students")) + 
+  scale_colour_manual(values=c(`PhD students` ="Dark Blue")) +
+  theme(legend.position="top") +
+  labs(title = paste0("Number of PhD students in Geography (using departments)"),
+       subtitle = paste0("", length(unique(geography_keywords$institution)), " Higher Education Institutions"),
+       color = "Number of Geography PhD students",
+       y = "Number of PhDs per year",
+       x = "Year the thesis was awarded")
+```
+
+I decided to combine all five ways of identifying which PhDs are geography ones in order to "find" all possible geography PhD theses. I then used the distinct function from dplyr so that there were not duplicates included in the final geography PhD data set.
+
+```{r combining geography PhDs}
+#combine three together and use distinct
+geography_PhDs <- rbind(geography_keywords, geography_sub_discipline, geography_titles, geography_dep) #, geography_abstract)
+
+geography_PhDs <- geography_PhDs %>%
+  distinct(title, institution, EThOS_ID, .keep_all = TRUE)
+```
+
++ 7,425 geography PhDs (after distinct)
+
+```{r Geography PhDs over time 5}
+#Using ALL FOUR METHODS
+
+Geog_years5 <- geography_PhDs %>%
+  group_by(date) %>%
+  summarise(count_years = n()) %>%
+  filter(date >= 1917) %>%
+  filter(date <= 2022)
+  
+ggplot(Geog_years5, 
+       aes(x=date)) + 
+  geom_line(aes(y = count_years), linetype = "solid") + 
+  labs(title = paste0("Geography PhD students over time"),
+       subtitle = paste0("", length(unique(geography_PhDs$institution)), " Higher Education Institutions"),
+       color = "Number of Geography PhD students",
+       y = "Number of Geography PhDs each year",
+       x = "Awarding year") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggsave("Geography_PhDs_1917_to_2023_line.png")
+```
+
+```{r}
+write_csv(geography_PhDs, "Geography_PhDs.csv")
+```
+

@@ -5,20 +5,20 @@ This markdown file and R code accompanies the article `Finding the female geogra
 The source data used to create this database of Geography PhDs is the April 2023 version of the British Library's E-Thesis Online Service (EThOS) metadata, where there are 627,042 doctoral records and 15 variables.
 
 The variables in EThOS include:
-    + Thesis title
-    + DOI
-    + Author name
-    + Author ISNI
-    + ORCID
-    + Institution
-    + Institutional ISNI
-    + Date of award
-    + Qualification
-    + Abstract
-    + Subject Discipline
-    + Supervisor
-    + Funder(s)
-    + EThOS URL
+  + Thesis title
+  + DOI
+  + Author name
+  + Author ISNI
+  + ORCID
+  + Institution
+  + Institutional ISNI
+  + Date of award
+  + Qualification
+  + Abstract
+  + Subject Discipline
+  + Supervisor
+  + Funder(s)
+  + EThOS URL
     
 Outline of the markdown file:
   + Cleaning the data
